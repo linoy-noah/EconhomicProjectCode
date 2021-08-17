@@ -1,0 +1,134 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+from decimal import Decimal
+
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+
+time = date_time.strftime("%H:%M:%S")
+date_ = date_time.strftime("%d-%m-%Y")
+set_time= date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+
+RoomsStatusTable = ddb.Table('RoomsStatus')
+UserConfigTable = ddb.Table('UserConfig')
+
+
+def lambda_handler(event, context):
+    
+    # TODO implement
+    response = RoomsStatusTable.get_item(Key={'UserID' : event['uuid']})
+    response_2 = UserConfigTable.get_item(Key={'UserID' : event['uuid']})
+    place = event["floor"] +"."+event["room"]
+    #print(response['Item']["floor"]["room"]["devices"]["lights"]["lightStatus"][0]["isOn"])
+    
+    # get the current light index
+    tempLst =response['Item'][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"]
+    flag = -1
+    inx = -1
+    i = 0
+    index =-1
+    for z in tempLst:
+        if z["number"] == event['number']:
+            inx = i
+            flag = 1
+            break
+        i=i+1
+    
+        
+    if flag == -1: # device doesnt exists. need to create device
+        lightList = response["Item"][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"]
+        topic = "set "+ place +".devices.lights.lightStatus = list_append(:c, :k), "+ place +".devices.lights.lightsAmount= :n"
+        if event["status"] =="on":
+            new_light = list()
+            new_light.append({"insideLightsLevel": response["Item"][event["floor"]][event["room"]]["insideLightsLevel"],
+              "isOn": True,
+              "lastDateSetOn": date_,
+              "lastTimeSetOn": time,
+              "number": event["number"],
+              "SetOnLogs": [{"setOnDate" : set_time,"setOffTime":"null", "whoTurnOff": "null"}]})
+            # amount = response["Item"][event["floor"]][event["room"]]["devices"]["lights"]["lightsAmount"] +1
+              
+            # topic += " , "+place+".devices.lights.lightStatus.lightsAmount= :n"
+            # response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']}, 
+            # UpdateExpression=topic ,
+            # ExpressionAttributeValues={':n' : amount ,':c': lightList, ':k' : new_light },
+            # ReturnValues="UPDATED_NEW")
+        else:
+            new_light = [{
+              "insideLightsLevel": response["Item"][event["floor"]][event["room"]]["insideLightsLevel"],
+              "isOn": False ,
+              "lastDateSetOn": "null",
+              "lastTimeSetOn": "null",
+              "number": event["number"],
+              "SetOnLogs": []}]
+            # response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+            # UpdateExpression=topic ,
+            # ExpressionAttributeValues={':c': lightList, ':k' : new_light },
+            # ReturnValues="UPDATED_NEW")
+        #doSomthing... need to add to the light list 
+        # topic += " , "+place+".devices.lights.lightStatus.lightsAmount= :n"
+        amount = response["Item"][event["floor"]][event["room"]]["devices"]["lights"]["lightsAmount"] +1
+        response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=topic ,
+        ExpressionAttributeValues={':n' : amount ,':c': lightList, ':k' : new_light },
+        ReturnValues="UPDATED_NEW")
+    
+    else: # device Exists
+        t = response["Item"][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"][inx]["lastTimeSetOn"]
+        d = response["Item"][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"][inx]["lastDateSetOn"]
+        i =0
+        
+        for setOnLog in response['Item'][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"][inx]["SetOnLogs"]:
+            if setOnLog["setOnDate"] == d+","+t:
+                index=i
+            i=i+1
+        
+        
+        if event["status"] == "on":
+            if index != -1:
+                log_index =response['Item'][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"][inx]["SetOnLogs"][index]
+                if log_index["whoTurnOff"] == "us":
+                    turn_off_time = datetime.strptime(log_index["setOffTime"],"%d-%m-%Y,%H:%M:%S")
+                    diff = now - turn_off_time
+                    minutessince = int(diff.total_seconds() / 60)
+                    if minutessince >= 10: 
+                        avg_diff =  Decimal(Decimal(response_2['Item']["op"]["lightsOp"]["errorCounter"] * response_2['Item']["op"]["lightsOp"]["averageTimeError"]) + Decimal(minutessince) ) /(response_2['Item']["op"]["lightsOp"]["errorCounter"] +1)
+                        _topic_= "set op.lightsOp.errorCounter = :g , op.lightsOp.averageTimeError =:t "
+                        response_3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                        UpdateExpression=_topic_ ,
+                        ExpressionAttributeValues={':t':avg_diff,':g':(response_2['Item']["op"]["lightsOp"]["errorCounter"] + 1) },
+                        ReturnValues="UPDATED_NEW") 
+                        print("update an error in baseline update userconfig ")
+            tempLst2 = response['Item'][event['floor']][event['room']]['devices']['lights']['lightStatus'][inx]['SetOnLogs']
+            new_log = list() 
+            new_log.append({"setOnDate" : set_time, "setOffTime" :  "null" , "whoTurnOff" : "null"})
+            tmp =place+".devices.lights.lightStatus["+str(inx)+"]."
+            topic="set "+tmp+"isOn = :a, "+tmp+"lastDateSetOn = :d, "+tmp+"lastTimeSetOn = :t, "+tmp+"SetOnLogs = list_append(:c, :k)" 
+            # topic= "set  boiler.isOn = :a , boiler.lastDateSetOn = :d, boiler.lastTimeSetOn = :t, boiler.SetOnLogs = list_append(:c,:k)"
+            response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=topic ,
+            ExpressionAttributeValues={':a':True , ':k':new_log,':c' :tempLst2 ,':t':time,':d' : date_},
+            ReturnValues="UPDATED_NEW")
+        if d != "null" and t != "null" and index != -1: 
+            if event["status"] == "off":  
+                tmp3 =place+".devices.lights.lightStatus["+str(inx)+"]."
+                topic= "set "+tmp3+"SetOnLogs["+str(index)+"].setOffTime = :t, "+tmp3+"SetOnLogs["+str(index)+"].whoTurnOff =:k ,"+tmp3+"isOn = :a"
+                response3 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':t':set_time , ':k':event['setOffBy'],':a':False},
+                ReturnValues="UPDATED_NEW")  
+            
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

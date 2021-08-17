@@ -1,0 +1,82 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from decimal import Decimal
+from datetime import datetime
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+table = ddb.Table('RoomsStatus')
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+h = int(date_time.strftime("%H"))
+t = date_time.strftime("%H:%M:%S")
+d = date_time.strftime("%d-%m-%Y")
+
+
+
+def lambda_handler(event, context):
+    
+    
+    # TODO implement
+    # response = table.scan(
+    # FilterExpression=Key('UserID').eq(event[ "uuid"]))
+    # if response['Count'] == 0:
+    #     #//insert
+    #     print("insert")
+    # else:
+    #     print("update")
+    index = 0
+    movement_count = event["motion"]
+    update_topic = "set "+ event["floor"] +"."+ event["room"] + ".motion.lastTime =:t , "
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    motion_json =response['Item'][event["floor"]][event["room"]]["motion"]
+    if motion_json["lastDate"] == d:
+        
+        j=0
+        
+        for log in motion_json["movmentLogs"]:
+            index = 0
+            if d == log["motionDate"]:
+                index =j
+                movement_count+= log["movementHour"][h]
+            j+=1
+        
+        update_topic= update_topic + event["floor"] +"."+ event["room"] +".motion.movmentLogs["+ str(index) +"].movementHour[" +str(h)+ "] =:b"
+        print(str(update_topic))
+        
+        response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=update_topic ,
+        ExpressionAttributeValues={':t': t,':b':movement_count},
+        ReturnValues="UPDATED_NEW")   
+    else:
+        list_hour = []
+        j=0
+        while j < 24:
+            if j == h:
+                print(type(j))
+                list_hour.append(movement_count)
+            else:
+                list_hour.append(0)
+            j+=1
+        # list_hour[int(h)] = 
+        print(list_hour)
+        
+        k = [{"motionDate" : d , "movementHour" : list_hour}]
+        update_topic = update_topic + event["floor"] +"."+ event["room"] + ".motion.lastDate =:d , "+ event["floor"] +"."+ event["room"] +".motion.movmentLogs = list_append(:c,:k)"
+        print (update_topic)
+        response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=update_topic ,
+        ExpressionAttributeValues={':t': t,':k':k,':d':d,':c' : motion_json["movmentLogs"]},
+                ReturnValues="UPDATED_NEW") 
+
+    print(response2) 
+    
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

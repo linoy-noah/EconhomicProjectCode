@@ -1,0 +1,91 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+from decimal import Decimal
+
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+
+time = date_time.strftime("%H:%M:%S")
+date_ = date_time.strftime("%d-%m-%Y")
+set_time= date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+
+RoomsStatusTable = ddb.Table('RoomsStatus')
+UserConfigTable = ddb.Table('UserConfig')
+
+
+def lambda_handler(event, context):
+    # TODO implement   
+    response = RoomsStatusTable.get_item(Key={'UserID' : event['uuid']})
+    response2 = UserConfigTable.get_item(Key={'UserID' : event['uuid']})
+    
+    d =response['Item']["boiler"]["lastDateSetOn"]
+    t = response['Item']["boiler"]["lastTimeSetOn"]
+    
+    
+    #  תייקון של הלמידה   
+    date_time_obj = datetime.strptime(set_time, '%d-%m-%Y,%H:%M:%S')
+    c = now-date_time_obj
+    minutes = c.total_seconds() / 60
+    i=0
+    index=-1
+    for setOnLog in response['Item']["boiler"]["SetOnLogs"]:
+        if setOnLog["SetOnDate"] == d+","+t:
+            index=i
+        i=i+1
+    
+    if index != -1:
+        diff = Decimal(response['Item']["boiler"]["SetOnLogs"][index]["waterTemperature"]) - Decimal(response2['Item']["op"]["boilerOp"]["waterOptimalTemperature"] )
+        avg_diff =  Decimal((Decimal(response2['Item']["op"]["boilerOp"]["errorCounter"] * response2['Item']["op"]["boilerOp"]["averageTemperatureGap"]) + diff ) /(response2['Item']["op"]["boilerOp"]["errorCounter"] +1))
+        print(avg_diff) 
+        
+    if event["status"] == "on":
+        if index != -1:
+            if "us" == response['Item']["boiler"]["SetOnLogs"][index]["whoTurnOff"]:
+                if minutes < 30 and abs(diff) <= 1:
+                    topic= "set op.boilerOp.errorCounter = :g "
+                    response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':g':response2['Item']["op"]["boilerOp"]["errorCounter"] + 1 },
+                    ReturnValues="UPDATED_NEW") 
+    
+        new_log = list() 
+        new_log.append({"SetOnDate" : set_time, "waterTemperature" : response['Item']["boiler"]["currentWaterTemperature"], "setOffTime" :  "null" , "whoTurnOff" : "null"})
+        
+        topic= "set  boiler.isOn = :a , boiler.lastDateSetOn = :d, boiler.lastTimeSetOn = :t, boiler.SetOnLogs = list_append(:c,:k)"
+        response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=topic ,
+        ExpressionAttributeValues={':a':True , ':k':new_log,':c' :response['Item']["boiler"]["SetOnLogs"] ,':t':time,':d' : date_},
+        ReturnValues="UPDATED_NEW") 
+            
+        
+
+    if event["status"] == "off":       
+        topic= "set   boiler.SetOnLogs["+str(index)+"].setOffTime =:t, boiler.SetOnLogs["+str(index)+"].whoTurnOff =:k ,boiler.isOn = :a"
+        response3 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=topic ,
+        ExpressionAttributeValues={':t':set_time , ':k':event['setOffBy'],':a':False},
+        ReturnValues="UPDATED_NEW")  
+        
+        if event['setOffBy'] == "user":
+            if abs(diff) >= 1:
+                topic= "set op.boilerOp.errorCounter = :g , op.boilerOp.averageTemperatureGap =:t "
+                response4 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':t':avg_diff,':g':response2['Item']["op"]["boilerOp"]["errorCounter"] + 1 },
+                ReturnValues="UPDATED_NEW") 
+        
+    
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

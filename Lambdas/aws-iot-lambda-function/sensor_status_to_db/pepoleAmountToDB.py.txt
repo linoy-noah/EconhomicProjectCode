@@ -1,0 +1,67 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+from datetime import datetime
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+t = date_time.strftime("%H:%M:%S,%d-%m-%Y")
+
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+
+ddb = boto3.resource('dynamodb')
+table = ddb.Table('RoomsStatus')
+
+def lambda_handler(event, context):
+    print(event['amount'])
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    update_topic= "set "+event["floor"] +"."+ event["room"] +".pepoleAmountInRoom =:b"
+    if event['amount']>0:
+        #המינוס אחד דפק את החזרה ממצב של חדר ריק השינוי היה לעשות קטן שווה לאפס ואז לאפס את החדר 
+        if response['Item'][event["floor"]][event["room"]]["pepoleAmountInRoom"] <= 0:
+            if not response['Item'][event["floor"]][event["room"]]["emptyRoomLogs"]["firstEmptyRoomTime"]=="null":
+                index=0
+                i=0
+                for emptyLog in response['Item'][event["floor"]][event["room"]]["emptyRoomLogs"]["emptyLog"]:
+                    if response['Item'][event["floor"]][event["room"]]["emptyRoomLogs"]["firstEmptyRoomTime"]== emptyLog["firstEmptyRoomTime"]:
+                        index=i
+                    i+=1
+                    
+                update_topic= update_topic+ ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.emptyLog["+str(index)+"].endEmptyRoomTime =:t"
+            update_topic= update_topic+ ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.firstEnterRoomTime =:t"
+            update_topic= update_topic + ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.isRoomEmpty =:a"
+            
+            response2 = table.update_item(Key ={'UserID' :  event['uuid']}, 
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':b':event['amount'],':a':False,":t":t},
+            ReturnValues="UPDATED_NEW") 
+            
+        else:
+            print(str(update_topic))
+            
+            response2 = table.update_item(Key ={'UserID' :  event['uuid']}, 
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':b':event['amount']},
+            ReturnValues="UPDATED_NEW") 
+    else:
+        if  response['Item'][event["floor"]][event["room"]]["emptyRoomLogs"]["isRoomEmpty"] == False:
+            update_topic= update_topic + ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.isRoomEmpty =:a"
+            update_topic= update_topic+ ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.firstEmptyRoomTime =:t"
+            update_topic= update_topic+ ", "+event["floor"]+"."+event["room"]+".emptyRoomLogs.emptyLog = list_append(:c,:k)"
+            k = [{"firstEmptyRoomTime" : t , "endEmptyRoomTime" : ""}]
+            
+            response2 = table.update_item(Key ={'UserID' :  event['uuid']}, 
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':b':event['amount'],':a':True,":t":t,":c":response['Item'][event["floor"]][event["room"]]["emptyRoomLogs"]["emptyLog"],":k":k},
+            ReturnValues="UPDATED_NEW") 
+        
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body':  json.dumps('Hello from Lambda!')
+    }

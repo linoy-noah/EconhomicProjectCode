@@ -1,0 +1,52 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+from decimal import Decimal
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+
+table = ddb.Table('RoomsStatus')
+ldr=""
+def lambda_handler(event, context):
+    if Decimal(event['LDR']) >= 500:
+        ldr="high"
+    if Decimal(event['LDR']) < 500 and event['LDR'] > 100:
+        ldr="medium"
+    if Decimal(event['LDR']) <= 100:
+        ldr="low"
+    
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    if event['type']== "out":
+        update_topic= "set "+event["floor"] +"."+ event["room"] +".outsideLightsLevel =:b"
+        print(str(update_topic))
+        
+        response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=update_topic ,
+        ExpressionAttributeValues={':b':ldr},
+        ReturnValues="UPDATED_NEW")  
+    else:
+        update_topic= "set "+event["floor"] +"."+ event["room"] +".insideLightsLevel =:b"
+        print(str(update_topic))
+        
+        response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=update_topic ,
+        ExpressionAttributeValues={':b':ldr},
+        ReturnValues="UPDATED_NEW")  
+        update_topic ="set "+event["floor"] +"."+ event["room"] +".devices.lights.lightStatus["
+        update_topic2= "].insideLightsLevel = :b"
+        j=0
+        for light in response['Item'][event["floor"]][event["room"]]["devices"]["lights"]["lightStatus"]:
+            if light["isOn"]==True:
+                response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+                UpdateExpression=update_topic+str(j)+update_topic2 ,
+                ExpressionAttributeValues={':b':ldr},
+                ReturnValues="UPDATED_NEW")
+            j+=1
+                
+                
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

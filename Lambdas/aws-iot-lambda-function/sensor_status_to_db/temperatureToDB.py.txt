@@ -1,0 +1,50 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+from decimal import Decimal
+
+# add api request to see outside weater
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+
+table = ddb.Table('RoomsStatus')
+
+def lambda_handler(event, context):
+    # TODO implement
+    kaak=""
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    if response['Item'][event["floor"]][event["room"]]["devices"]["ac"]["isOn"] == True:
+        index=0
+        i=0
+        d =response['Item'][event["floor"]][event["room"]]["devices"]["ac"]["lastDateSetOn"]
+        t = response['Item'][event["floor"]][event["room"]]["devices"]["ac"]["lastTimeSetOn"]
+        
+        for setOnLog in response['Item'][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"]:
+            if setOnLog["SetOnDate"] == d+","+t:
+                index=i
+            i=i+1
+        kaak =", "+ event["floor"]+"."+event["room"]+".devices.ac.SetOnLogs[" +str(index)+ "].roomTemperature =:t"
+        # kaak="lalal"
+        print(kaak)
+    
+       
+    
+    # print(response['Item']["boiler"])
+    response2 = table.update_item(Key ={'UserID' :  event['uuid']},
+    UpdateExpression="set " +event["floor"]+"."+event["room"]+".roomTemperature =:t"+kaak ,
+    ExpressionAttributeValues={':t': Decimal(str(event['temperature']))},
+    ReturnValues="UPDATED_NEW")
+    
+    
+    
+   
+    
+    # response = table.get_item(Key={'UserID' : event['uuid']}) 
+   
+   
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

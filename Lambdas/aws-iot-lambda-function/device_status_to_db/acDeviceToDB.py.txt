@@ -1,0 +1,129 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from decimal import Decimal
+
+from datetime import datetime
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+table = ddb.Table('RoomsStatus')
+UserConfigTable = ddb.Table('UserConfig')
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+h = int(date_time.strftime("%H"))
+t = date_time.strftime("%H:%M:%S")
+d = date_time.strftime("%d-%m-%Y")
+set_time = date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+
+
+
+def lambda_handler(event, context):
+    intro = event["floor"]+"."+event["room"]+".devices.ac"
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    response_2 = UserConfigTable.get_item(Key={'UserID' : event['uuid']})
+    lastTime = response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastTimeSetOn"]
+    lastDate =response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastDateSetOn"]
+    index =-1
+    i=0
+    for acLog in response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"]:
+        if acLog["SetOnDate"] == lastDate+","+lastTime:
+            index=i
+        i+=1
+    if event['opType'] == "acState":
+        if event['status'] == "on":
+            if index != -1:
+                if response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"][index]["whoTurnOff"] == "us":
+                    turn_off_time = datetime.strptime(response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"][index]["setOffTime"],"%d-%m-%Y,%H:%M:%S")
+                    diff = now - turn_off_time
+                    minutessince = int(diff.total_seconds() / 60)
+                    if minutessince >= 10: 
+                        avg_diff = Decimal(Decimal(response_2['Item']["op"]["AcOp"]["TimeErrorCounter"]* Decimal(response_2['Item']["op"]["AcOp"]["averageTimeError"])+ Decimal(minutessince))/response_2['Item']["op"]["AcOp"]["TimeErrorCounter"] + 1)
+                        _topic_= "set op.AcOp.TimeErrorCounter = :g , op.AcOp.averageTimeError =:t "
+                        response_3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                        UpdateExpression=_topic_ ,
+                        ExpressionAttributeValues={':t':avg_diff,':g':(response_2['Item']["op"]["AcOp"]["TimeErrorCounter"] + 1) },
+                        ReturnValues="UPDATED_NEW")
+                        print("op-ac-turnOffError  ")
+            temp = {
+                "currentTemperature": event["ac_temp"],
+                "setTemperatureTime": t,
+                "whoSetTemperature": "user"
+              }
+            k=[{
+              "outsideTemperature": response["Item"]["outsideTemperature"],
+              "roomTemperature": response["Item"][event["floor"]][event["room"]]["roomTemperature"],
+              "setOffTime": "Null",
+              "SetOnDate":set_time,
+              "temperature": temp,
+              "whoTurnOff": "Null"
+            }]
+            
+            topic= "set " + intro+".isOn =:a "
+            topic+=","+intro+".lastDateSetOn =:d"
+            topic+=","+intro+".lastTimeSetOn =:t"
+            topic+=","+intro+".SetOnLogs = list_append(:w,:k), "+intro+".temperature =:c"
+            response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=topic ,
+            ExpressionAttributeValues={':c':temp,':a':True,':t':t,':d':d,':k':k,':w' : response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"] },
+            ReturnValues="UPDATED_NEW")
+        if event['status'] == "off":
+            lastTime = response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastTimeSetOn"]
+            lastDate =response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastDateSetOn"]
+            index =-1
+            i=0
+            for acLog in response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"]:
+                if acLog["SetOnDate"] == lastDate+","+lastTime:
+                    index=i
+                i+=1
+            topic= "set " + intro+".isOn =:a"
+            topic+=","+intro+".SetOnLogs[" + str(index)+"].setOffTime =:t"
+            topic+=","+intro+".SetOnLogs[" + str(index)+"].whoTurnOff =:b"
+            response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=topic ,
+            ExpressionAttributeValues={':a':False ,':t':set_time,":b": event['setOffBy'] },
+            ReturnValues="UPDATED_NEW")
+
+    if event['opType'] == "temperatureSet" and response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["isOn"]==True:
+        # lastTime = response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastTimeSetOn"]
+        # lastDate =response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["lastDateSetOn"]
+        # index =-1
+        # i=0
+        # for acLog in response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"]:
+        #     if acLog["SetOnDate"] == lastDate+","+lastTime:
+        #         index=i   
+        #     i+=1       
+        # no need       
+            
+        #if index != -1:
+        if response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"][index]["temperature"]["whoSetTemperature"] == "us":
+            print("op-ac-changeTemperatureError")
+            temp_gap = event["ac_temp"]- response["Item"][event["floor"]][event["room"]]["devices"]["ac"]["SetOnLogs"][index]["temperature"]["currentTemperature"]
+            avg_diff = Decimal(Decimal(response_2['Item']["op"]["AcOp"]["tempetureGapErrorCounter"]* Decimal(response_2['Item']["op"]["AcOp"]["averageTemperatureGap"])+ Decimal(temp_gap))/(response_2['Item']["op"]["AcOp"]["tempetureGapErrorCounter"] + 1))
+            _topic_= "set op.AcOp.tempetureGapErrorCounter = :g , op.AcOp.averageTemperatureGap =:t "
+            response_3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=_topic_ ,
+            ExpressionAttributeValues={':t':avg_diff,':g':(response_2['Item']["op"]["AcOp"]["tempetureGapErrorCounter"] + 1) },
+            ReturnValues="UPDATED_NEW")
+            
+                    
+        k= {
+                "currentTemperature": event["ac_temp"],
+                "setTemperatureTime": set_time,
+                "whoSetTemperature":event["setTemperatureBy"]
+              }
+        topic= "set " + intro+".SetOnLogs[" + str(index)+"].temperature =:a, " + intro +".temperature =:a"
+        response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=topic ,
+        ExpressionAttributeValues={':a':k },
+        ReturnValues="UPDATED_NEW")
+    print("LL")
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

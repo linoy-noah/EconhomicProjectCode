@@ -1,0 +1,74 @@
+import json
+import boto3
+from datetime import datetime
+from decimal import Decimal
+
+import botocore.awsrequest
+import urllib3
+
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+
+set_time= date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+
+UserTestTable = ddb.Table('UserTest')
+RoomsStatusTable = ddb.Table('RoomsStatus')
+
+
+####עובדדדדדדדדד טילל !!     
+
+
+def lambda_handler(event, context):
+    response2 = RoomsStatusTable.get_item(Key={'UserID' : event['uuid']})  
+    if response2["Item"]["lastModifyOutsideTemperature"] != "Null":
+        last_modify_time = datetime.strptime(response2["Item"]["lastModifyOutsideTemperature"],"%d-%m-%Y,%H:%M:%S")
+        diff = now - last_modify_time
+        minutessince = int(diff.total_seconds() / 60)
+    else:
+        minutessince=60
+    if minutessince >= 60: 
+        
+        response1 = UserTestTable.get_item(Key={'UserID' : event['uuid']})
+        
+        state = response1["Item"]["Address"]["state"]
+        city =  response1["Item"]["Address"]["city"]
+        
+        
+        url = "api.openweathermap.org/data/2.5/weather?q="+city+","+state+"&appid=90a31a588530a4edde1fdf1c011e5556"
+
+        
+        http = urllib3.PoolManager()
+        response = http.request('GET', url)
+        print(type(response.data)) 
+        my_bytes_value = response.data
+        # Decode UTF-8 bytes to Unicode, and convert single quotes 
+        # to double quotes to make it valid JSON
+        my_json = my_bytes_value.decode('utf8').replace("'", '"')
+
+        # Load the JSON to a Python list & dump it back out as formatted JSON
+        data = json.loads(my_json)
+        # s = json.dumps(data, indent=4, sort_keys=True)
+        print(data)
+        print('- ' * 20)
+        print(set_time)
+        c= data["main"]["temp"] -273.1
+        #0K − 273.15 = -273.1°C //Convert Formula from kelvin to celsius
+        print(c)
+        topic = "set lastModifyOutsideTemperature= :t , outsideTemperature = :c"
+        response4 = RoomsStatusTable.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=topic ,
+        ExpressionAttributeValues={':c': Decimal(str(c)), ':t' : set_time },
+        ReturnValues="UPDATED_NEW")
+
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

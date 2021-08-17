@@ -1,0 +1,261 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+table = ddb.Table('UserConfig')
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+h = int(date_time.strftime("%H"))
+t = date_time.strftime("%H:%M:%S")
+d = date_time.strftime("%d-%m-%Y")
+set_time = date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+iot_client = boto3.client('iot-data')
+# response = iot_client.describe_endpoint(
+#     endpointType=' a3a4qqsp3xsqud-ats.iot.eu-west-1.amazonaws.com'
+# )
+# dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+# ddb = boto3.resource('dynamodb')
+# UserConfigTable = ddb.Table('UserConfig')
+    
+
+def lambda_handler(event, context):
+    uuid = event["Records"][0]["dynamodb"]["NewImage"]["UserID"]["S"]
+    floor = event["Records"][0]["dynamodb"]["NewImage"]["floor"]["S"]
+    room = event["Records"][0]["dynamodb"]["NewImage"]["room"]["S"]
+    response = table.get_item(Key={'UserID' :uuid})
+    # opName = event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"]
+    # topic= "set op."+ opName +".notifyUserID = :g "
+    # response3 = UserConfigTable.update_item(Key ={'UserID' :  uuid},
+    # UpdateExpression=topic ,
+    # ExpressionAttributeValues={':g':True },
+    # ReturnValues="UPDATED_NEW") 
+  
+    if "MODIFY" == event["Records"][0]["eventName"] and not event["Records"][0]["dynamodb"]["NewImage"]["userAnswer"]["N"]==event["Records"][0]["dynamodb"]["OldImage"]["userAnswer"]["N"]:
+        if event["Records"][0]["dynamodb"]["NewImage"]["userAnswer"]["N"] == "1":
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "waterTapOp":
+                topic = "jobs/" + uuid + '/' + floor + "/" + room + "/pump/state"
+                iot_client.publish(topic=topic,payload=json.dumps({"status":"off"}))
+                
+                opLog=response['Item']["op"]["waterTapOp"]["opLogs"][floor][room]["opLogInRoom"]
+                i = [set_time]
+                
+                topic = "SET op.waterTapOp.opLogs."+floor+"."+room+".opLogInRoom = list_append(:list, :i)"
+                topic += ", op.waterTapOp.opLogs."+floor+"."+room+".lastDateUsedOperation = :d"
+                topic += ", op.waterTapOp.opLogs."+floor+"."+room+".lastTimeUsedOperation = :t ,op.waterTapOp.userNotifyTotal = :b "
+                print(topic) 
+                 
+                total_notify = response['Item']["op"]["waterTapOp"]["userNotifyTotal"]+1
+                
+                
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':list': opLog,":i":i,":d":d,":t": t,':b':total_notify},
+                ReturnValues="UPDATED_NEW")
+                
+                
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "lightsOp":
+                topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/lights/state"
+                iot_client.publish(topic=topic,payload=json.dumps({"status":"off"}))
+                reason = event["Records"][0]["dynamodb"]["NewImage"]["reason"]["S"]
+                
+                
+                if reason =="outside_lightLevel":
+                    topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/window/state"
+                    iot_client.publish(topic=topic,payload=json.dumps({"status":"open","reason":reason}))
+                opLog=response['Item']["op"]["lightsOp"]["opLogs"][floor][room]["opLogInRoom"]
+                i =list()
+                i.append({"reason": reason,"UsedOperationDate": set_time})
+                
+                topic = "SET op.lightsOp.opLogs."+floor+"."+room+".opLogInRoom = list_append(:list, :i)"
+                topic += ", op.lightsOp.opLogs."+floor+"."+room+".lastDateUsedOperation = :d"
+                topic += ", op.lightsOp.opLogs."+floor+"."+room+".lastTimeUsedOperation = :t,op.lightsOp.userNotifyTotal = :b "
+                print(topic) 
+                 
+                total_notify = response['Item']["op"]["lightsOp"]["userNotifyTotal"]+1
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':list': opLog,":i":i,":d":d,":t": t,':b':total_notify},
+                ReturnValues="UPDATED_NEW")
+                
+                
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "boilerOp":
+                topic = "jobs/" + uuid + "/boiler/state" 
+                iot_client.publish(topic=topic,payload=json.dumps({"status":"off"}))
+               
+                opLog=response['Item']["op"]["boilerOp"]["opLogs"]["opLogInRoom"]
+                i =[set_time]
+                
+                topic = "SET op.boilerOp.opLogs.opLogInRoom = list_append(:list, :i)"
+                topic += ", op.boilerOp.opLogs.lastDateUsedOperation = :d"
+                topic += ", op.boilerOp.opLogs.lastTimeUsedOperation = :t,op.boilerOp.userNotifyTotal = :b "
+                print(topic) 
+                 
+                total_notify = response['Item']["op"]["boilerOp"]["userNotifyTotal"]+1
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':list': opLog,":i":i,":d":d,":t": t, ":b":total_notify},
+                ReturnValues="UPDATED_NEW")
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "AcOp":
+                if event["Records"][0]["dynamodb"]["NewImage"]["op_ac"]["S"] == "changeTemperature":
+                    oprimalTemp=response['Item']["op"]["AcOp"]["ourLearn"]["roomOptimalTemperature"]
+                    topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/ac/state";
+                    iot_client.publish(topic=topic,payload=json.dumps({"set_temperature" : str(oprimalTemp)}))
+                    # reason = event["Records"][0]["dynamodb"]["NewImage"]["reason"]["S"]
+                    opLog=response['Item']["op"]["AcOp"]["opLogs"][floor][room]["changeTemperature"]["opLogInRoom"]
+                    i =[set_time]
+                    # i.append({"reason": reason,"UsedOperationDate": set_time})
+                    
+                    topic = "SET op.AcOp.opLogs."+floor+"."+room+".changeTemperature.opLogInRoom = list_append(:list, :i)"
+                    topic += ", op.AcOp.opLogs."+floor+"."+room+".changeTemperature.lastDateUsedOperation = :d"
+                    topic += ", op.AcOp.opLogs."+floor+"."+room+".changeTemperature.lastTimeUsedOperation = :t,op.AcOp.userNotifyToChangeTemperature = :b "
+                    print(topic) 
+                     
+                    total_notify = response['Item']["op"]["AcOp"]["userNotifyToChangeTemperature"]+1
+
+                    
+                
+                    response4 = table.update_item(Key ={'UserID' : uuid},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':list': opLog,":i":i,":d":d,":t": t,":b":total_notify},
+                    ReturnValues="UPDATED_NEW")
+                        
+                    
+                if event["Records"][0]["dynamodb"]["NewImage"]["op_ac"]["S"] == "turnOffAc":
+                    reason = event["Records"][0]["dynamodb"]["NewImage"]["reason"]["S"]
+                    if reason =="openedWindow":
+                        topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/window/state"
+                        iot_client.publish(topic=topic,payload=json.dumps({"status":"close","reason":reason}))
+                    else:
+                        topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/ac/state";
+                        iot_client.publish(topic=topic,payload=json.dumps({"set_status":"off"}))
+                        if  reason == "outSide_temperature":
+                            topic =  "jobs/" + uuid + '/' + floor + "/" + room + "/window/state"
+                            iot_client.publish(topic=topic,payload=json.dumps({"status":"open","reason":reason}))
+                            
+                    
+                    opLog=response['Item']["op"]["AcOp"]["opLogs"][floor][room]["turnOffAc"]["opLogInRoom"]
+                    i =list()
+                    i.append({"reason": reason,"UsedOperationDate": set_time})
+                    
+                    topic = "SET op.AcOp.opLogs."+floor+"."+room+".turnOffAc.opLogInRoom = list_append(:list, :i)"
+                    topic += ", op.AcOp.opLogs."+floor+"."+room+".turnOffAc.lastDateUsedOperation = :d"
+                    topic += ", op.AcOp.opLogs."+floor+"."+room+".turnOffAc.lastTimeUsedOperation = :t ,op.AcOp.userNotifyToTurnOff = :b  "
+                    print(topic) 
+                     
+                    total_notify = response['Item']["op"]["AcOp"]["userNotifyToTurnOff"]+1
+                
+                    response4 = table.update_item(Key ={'UserID' : uuid},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':list': opLog,":i":i,":d":d,":t": t,":b":total_notify},
+                    ReturnValues="UPDATED_NEW")
+                        
+            
+            
+            print("yey")
+        if event["Records"][0]["dynamodb"]["NewImage"]["userAnswer"]["N"] =="2":
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "waterTapOp":
+                
+                userRefused=response['Item']["op"]["waterTapOp"]["userRefused"] +1
+                total_notify = response['Item']["op"]["waterTapOp"]["userNotifyTotal"]+1
+                
+                
+                topic = "SET op.waterTapOp.userRefused = :a ,op.waterTapOp.userNotifyTotal = :b  "
+                print(topic) 
+                 
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':a':userRefused, ':b' : total_notify},
+                ReturnValues="UPDATED_NEW")
+                
+                
+
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "lightsOp":
+                
+                userRefused=response['Item']["op"]["lightsOp"]["userRefused"]+1
+                total_notify = response['Item']["op"]["lightsOp"]["userNotifyTotal"]+1
+               
+                
+                topic = "SET op.lightsOp.userRefused = :a ,op.lightsOp.userNotifyTotal = :b  "
+                print(topic) 
+                 
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':a':userRefused, ':b' : total_notify},
+                ReturnValues="UPDATED_NEW")
+                
+                
+                
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "boilerOp":
+                
+               
+                userRefused=response['Item']["op"]["boilerOp"]["userRefused"]+1
+                total_notify = response['Item']["op"]["boilerOp"]["userNotifyTotal"]+1
+               
+                
+                topic = "SET op.boilerOp.userRefused = :a ,op.boilerOp.userNotifyTotal = :b  "
+                print(topic) 
+                 
+                
+                
+                response4 = table.update_item(Key ={'UserID' : uuid},
+                UpdateExpression=topic ,
+                ExpressionAttributeValues={':a':userRefused, ':b' : total_notify},
+                ReturnValues="UPDATED_NEW")
+                
+                
+            if event["Records"][0]["dynamodb"]["NewImage"]["op"]["S"] == "AcOp":
+                if event["Records"][0]["dynamodb"]["NewImage"]["op_ac"]["S"] == "changeTemperature":
+                    
+                    userRefused=response['Item']["op"]["AcOp"]["userRefusedToChangeTemperature"]+1
+                    total_notify = response['Item']["op"]["AcOp"]["userNotifyToChangeTemperature"]+1
+
+                    topic = "SET op.AcOp.userRefusedToChangeTemperature = :a ,op.AcOp.userNotifyToChangeTemperature = :b  "
+                    print(topic) 
+                     
+                    
+                    
+                    response4 = table.update_item(Key ={'UserID' : uuid},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':a':userRefused, ':b' : total_notify},
+                    ReturnValues="UPDATED_NEW")
+                        
+                    
+                if event["Records"][0]["dynamodb"]["NewImage"]["op_ac"]["S"] == "turnOffAc":
+                     
+                    userRefused=response['Item']["op"]["AcOp"]["userRefusedToTurnOff"]+1
+                    total_notify = response['Item']["op"]["AcOp"]["userNotifyToTurnOff"]+1
+
+                    topic = "SET op.AcOp.userRefusedToTurnOff = :a ,op.AcOp.userNotifyToTurnOff = :b  "
+                    print(topic) 
+                     
+                    
+                    
+                    response4 = table.update_item(Key ={'UserID' : uuid},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':a':userRefused, ':b' : total_notify},
+                    ReturnValues="UPDATED_NEW")
+            
+            
+            
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

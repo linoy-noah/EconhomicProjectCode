@@ -1,0 +1,339 @@
+import json
+import uuid
+import boto3
+from decimal import Decimal
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+UserConfigTable = ddb.Table('UserConfig')
+UserTestTable = ddb.Table('UserTest')
+RoomsStatusTable = ddb.Table('RoomsStatus')
+NotifyUserTable = ddb.Table('NotifyUser')
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+h = int(date_time.strftime("%H"))
+t = date_time.strftime("%H:%M:%S")
+d = date_time.strftime("%d-%m-%Y")
+set_time = date_time.strftime("%d-%m-%Y,%H:%M:%S")
+
+iot_client = boto3.client('iot-data')
+emptyMinute=0
+def lambda_handler(event, context):
+    print(event)
+    notifyUserID = uuid.uuid4()
+    user_uuid = event['uuid']
+    UserConfig_response = UserConfigTable.get_item(Key={'UserID' : user_uuid})
+    UserTest_response = UserTestTable.get_item(Key={'UserID' : user_uuid})
+    RoomsStatus_response = RoomsStatusTable.get_item(Key={'UserID' : user_uuid})
+    
+    #insert_notify = {"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid}
+    
+    auto = UserTest_response['Item']['AutomaticActions']
+    doNotify = True
+    deviceType = event['type']
+    # opName =""
+    # # notifyString =""
+    # if deviceType =="ac" :
+    #     opName="AcOp"
+    #     # if UserConfig_response['Item']['op']['AcOp']["notifyUserID"] != "Null":
+    #     #     NotifyUser_response = NotifyUserTable.get_item(Key={'NotifyUserID' : UserConfig_response['Item']['op']['AcOp']["notifyUserID"] })
+    #     #     for i in NotifyUser_response:
+    #     #         if str(i["NotifyUserID"]) == UserConfig_response['Item']['op']['AcOp']["notifyUserID"] :
+                    
+    #     #             if i["userAnswer"] ==0:
+    #     doNotify = UserConfig_response['Item']['op']['AcOp']["notifyUserID"]
+    
+    # if deviceType =="pump" :
+    #     opName ="waterTapOp"
+    #     # if UserConfig_response['Item']['op']['waterTapOp']["notifyUserID"] != "Null":
+    #     #     NotifyUser_response = NotifyUserTable.get_item(Key={'NotifyUserID' : UserConfig_response['Item']['op']['waterTapOp']["notifyUserID"] })
+            
+    #     #     for i in NotifyUser_response:
+    #     #         if str(i["NotifyUserID"]) == UserConfig_response['Item']['op']['waterTapOp']["notifyUserID"] :
+    #     #             if i["userAnswer"] ==0:
+    #     doNotify =  UserConfig_response['Item']['op']['waterTapOp']["notifyUserID"] 
+    
+    # if deviceType == "lights":
+    #     opName ="lightsOp"
+    #     # if UserConfig_response['Item']['op']['lightsOp']["notifyUserID"] != "Null":
+    #     #     NotifyUser_response = NotifyUserTable.get_item(Key={'NotifyUserID' : UserConfig_response['Item']['op']['lightsOp']["notifyUserID"] })
+            
+    #     #     for i in NotifyUser_response:
+    #     #         if str(i["NotifyUserID"]) == UserConfig_response['Item']['op']["lightsOp"]["notifyUserID"] :
+    #     #             if i["userAnswer"] ==0:
+    #     doNotify =  UserConfig_response['Item']['op']['lightsOp']["notifyUserID"] 
+
+    # if deviceType == "boiler":
+    #     opName ="boilerOp"
+    #     # if UserConfig_response['Item']['op']['boilerOp']["notifyUserID"] != "Null":
+    #     #     NotifyUser_response = NotifyUserTable.get_item(Key={'NotifyUserID' : UserConfig_response['Item']['op']['boilerOp']["notifyUserID"] })
+            
+    #     #     for i in NotifyUser_response['Item']:
+    #     #         # print(i["NotifyUserID"][0])
+    #     #         if str(i["NotifyUserID"]) == UserConfig_response['Item']['op']["boilerOp"]["notifyUserID"] :
+    #     #             if i["userAnswer"] ==0:
+    #     doNotify = UserConfig_response['Item']['op']['boilerOp']["notifyUserID"]
+
+    
+        
+    
+        #update
+
+    
+        
+        
+        
+    
+    
+    if deviceType =="boiler":
+        optimalTemp = UserConfig_response['Item']['op']['boilerOp']['waterOptimalTemperature']
+        print(optimalTemp)
+        diff = Decimal(Decimal(event['waterTemperature'] )- optimalTemp)
+        if  diff >= 0:
+            if auto['Boiler'] == False:
+                if doNotify == True:
+                    opName = "boilerOp"
+                    msgToUser="The water temperature is "+ str(event['waterTemperature'] ) +" degrees. Turn off the boiler?"
+                    print("insert item to NotifyUser")
+                    response2 = NotifyUserTable.put_item(Item={"floor": "","NotifyUserID": str(notifyUserID), "room":"","userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                    topic= "set op."+ opName +".notifyUserID = :g "
+                    response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                    UpdateExpression=topic ,
+                    ExpressionAttributeValues={':g':False },
+                    ReturnValues="UPDATED_NEW") 
+                else:
+                    print("noo Too much!!!")
+            else:
+                topic = "jobs/" + user_uuid + "/boiler/state" 
+                iot_client.publish(topic=topic,payload=json.dumps({"status":"off"}))
+                print("post mqtt")
+        print("boiler")
+    else:
+        floor = event['floor']
+        room = event['room']
+        
+        isRoomEmpty = RoomsStatus_response['Item'][floor][room]["emptyRoomLogs"]["isRoomEmpty"]
+        print(RoomsStatus_response['Item'][floor][room]["emptyRoomLogs"]["isRoomEmpty"])
+        roomEmptySince = RoomsStatus_response['Item'][floor][room]["emptyRoomLogs"]["firstEmptyRoomTime"]
+        
+        if isRoomEmpty:
+            date_time_obj = datetime.strptime(roomEmptySince, '%H:%M:%S,%d-%m-%Y')
+            c = now-date_time_obj
+            emptyMinutes = c.total_seconds() / 60
+            print(emptyMinutes)
+
+        print(isRoomEmpty)
+        
+        if deviceType =="pump":
+            study_emptyRoomTime = UserConfig_response['Item']['op']['waterTapOp']['emptyRoomTime']
+            if isRoomEmpty==True:
+                if Decimal(emptyMinutes) > Decimal(study_emptyRoomTime):
+                    if auto['WaterTap'] == True:
+                        topic = "jobs/" + user_uuid + '/' + floor + "/" + room + "/pump/state"
+                        iot_client.publish(topic=topic,payload=json.dumps({"status":"off"}))
+                        print("post mqtt")
+                    else:
+                        if doNotify == True:
+                            opName = "waterTapOp"
+                            msgToUser="You left the water tap open in '"+room+"' room on the'"+floor+"'floor and the room had been empty for "+str(emptyMinute)+" minutes. close the water tap?"
+                            print("insert item to NotifyUser")
+                            response2 = NotifyUserTable.put_item(Item={"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                            topic= "set op."+ opName +".notifyUserID = :g "
+                            response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                            UpdateExpression=topic ,
+                            ExpressionAttributeValues={':g':False },
+                            ReturnValues="UPDATED_NEW") 
+                        else:
+                            print("noo Too much!!!")     
+                        
+                        
+        if deviceType =="lights":
+            study_lightLevel = UserConfig_response['Item']['op']['lightsOp']['roomLightsLevel']
+            study_emptyRoomTime = UserConfig_response['Item']['op']['lightsOp']['emptyRoomTime']
+            is_ac_on =RoomsStatus_response['Item'][floor][room]["devices"]['ac']['isOn']
+            outSide_lightLevel =RoomsStatus_response['Item'][floor][room]["outsideLightsLevel"]
+            
+            if isRoomEmpty==True:
+                if Decimal(emptyMinutes) >= Decimal(study_emptyRoomTime):
+                    if auto['Light'] == True:
+                        reason="emptyRoom"
+                        topic =  "jobs/" + user_uuid + '/' + floor + "/" + room + "/lights/state"
+                        iot_client.publish(topic=topic,payload=json.dumps({"status":"off","reason": reason}))
+                        print("post mqtt")
+                    else:
+                        if doNotify == True:
+                            
+                            opName = "lightsOp"
+                            msgToUser="You left the lights on in '"+room+"' room on the'"+floor+"'floor and the room had been empty for "+str(emptyMinute)+" minutes. Turn off the lights?"
+                            reason="emptyRoom"
+                            print("insert item to NotifyUser")
+                            response2 = NotifyUserTable.put_item(Item={"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"reason": reason,"op": opName,"msgToUser": msgToUser})
+                            topic= "set op."+ opName +".notifyUserID = :g "
+                            response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                            UpdateExpression=topic ,
+                            ExpressionAttributeValues={':g':False },
+                            ReturnValues="UPDATED_NEW") 
+                        else:
+                            print("noo Too much!!!")
+            else:
+                if study_lightLevel == outSide_lightLevel and is_ac_on == False:
+                    if auto['Light'] == True:
+                        reason="outside_lightLevel"
+                        topic =  "jobs/" + user_uuid + '/' + floor + "/" + room + "/lights/state"
+                        iot_client.publish(topic=topic,payload=json.dumps({"status":"off","reason": reason}))
+                        topic =  "jobs/" + user_uuid +'/' + floor + "/" + room + "/window/state"
+                        iot_client.publish(topic=topic,payload=json.dumps({"status":"open","reason":"outSide_lightLevel"}))
+                        print("post mqtt + open window")
+                    else:
+                        if doNotify == True:
+                            
+                            opName = "lightsOp"
+                            msgToUser="There's a nice light outside, do you want us to turn off the lights and open a window?"
+                            reason="outside_lightLevel"
+                            print("insert item to NotifyUser")
+                            response2 = NotifyUserTable.put_item(Item={"reason":reason,"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                            topic= "set op."+ opName +".notifyUserID = :g "
+                            response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                            UpdateExpression=topic ,
+                            ExpressionAttributeValues={':g':False },
+                            ReturnValues="UPDATED_NEW") 
+                        else:
+                            print("noo Too much!!!")     
+                        
+        if deviceType =="ac":
+            # אם מתאמן נראה זאת בעזרת תזוזה מרובה ולכן נשאיר לא משנה מה
+            study_emptyRoomTime =UserConfig_response['Item']['op']['AcOp']['emptyRoomTime']
+            optimalTemp= UserConfig_response['Item']['op']['AcOp']['roomOptimalTemperature']
+            outsideTemperature = RoomsStatus_response['Item']["outsideTemperature"]
+            room_temperature = RoomsStatus_response['Item'][floor][room]["roomTemperature"]
+            motion_counter = 0 #
+            for day in RoomsStatus_response['Item'][floor][room]["motion"]["movmentLogs"]:
+                if day["motionDate"] == d:
+                    motion_counter = day["movementHour"][h]
+            
+            #motion_counter = RoomsStatus_response['Item'][floor][room]["motion"]["isRoomEmpty"] צריך למצוא לפי מה אנחנו לוקחים לפי התאריך של היום או של האחרון
+            ac_curr_temp = event['temperature']
+            if isRoomEmpty==True:
+                print("i here")
+                if emptyMinutes >= study_emptyRoomTime:
+                    reason="emptyRoom"
+                    if auto['AirConditioner'] == True:
+                        topic =  "jobs/" + user_uuid +'/' + floor + "/" + room + "/ac/state";
+                        iot_client.publish(topic=topic,payload=json.dumps({"set_status":"off", "reason": reason}))    
+                        print("post mqtt turn off")
+                    else:
+                        if doNotify == True:
+                            opName = "AcOp"
+                            msgToUser="You left the air conditioner on in '"+room+"' room on the'"+floor+"'floor and the room had been empty for "+str(emptyMinute)+" minutes. turn off the air conditioner?"
+                            op_ac= "turnOffAc"
+                            print("insert item to NotifyUser")
+                            response2 = NotifyUserTable.put_item(Item={"op_ac":op_ac, "reason": reason,"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                            topic= "set op."+ opName +".notifyUserID = :g "
+                            response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                            UpdateExpression=topic ,
+                            ExpressionAttributeValues={':g':False },
+                            ReturnValues="UPDATED_NEW") 
+                        else:
+                            print("noo Too much!!!") 
+            else:
+                print(motion_counter)
+                if motion_counter < 300:
+                    print("im here")
+                    if outsideTemperature <= optimalTemp:
+                        reason="outsideTemperature"
+                        if auto['AirConditioner'] == True:
+                            topic =  "jobs/" + user_uuid +'/' + floor + "/" + room + "/ac/state";
+                            iot_client.publish(topic=topic,payload=json.dumps({"set_status":"off", "reason": reason})) 
+                            topic =  "jobs/" + user_uuid +'/' + floor + "/" + room + "/window/state";
+                            iot_client.publish(topic=topic,payload=json.dumps({"status":"open", "reason": reason}))    
+                            print("post mqtt turn off")
+                        else:
+                            if doNotify == True:
+                                opName = "AcOp"
+                                msgToUser="the air conditioner on in '"+room+"' room on the'"+floor+"'floor and there is a nice day outside. turn off the air conditioner and open the windows?"
+                                op_ac= "turnOffAc"
+                                print("insert item to NotifyUser")
+                                response2 = NotifyUserTable.put_item(Item={"op_ac":op_ac, "reason": reason,"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                                topic= "set op."+ opName +".notifyUserID = :g "
+                                response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                                UpdateExpression=topic ,
+                                ExpressionAttributeValues={':g':False },
+                                ReturnValues="UPDATED_NEW") 
+                            else:
+                                print("noo Too much!!!")
+                    else:    
+                        if  optimalTemp >=  ac_curr_temp:
+                            if optimalTemp >= room_temperature:
+                                reason="optimalTemp"
+                                if auto['AirConditioner'] == True:
+                                    topic =  "jobs/" + user_uuid + '/' + floor + "/" + room + "/ac/state";
+                                    iot_client.publish(topic=topic,payload=json.dumps({"set_temperature" : str(oprimalTemp)}))
+                                    print("post mqtt")
+                                else:
+                                    if doNotify == True:
+                                        opName = "AcOp"
+                                        msgToUser="Would you like to change the air conditioner degrees to "+str(oprimalTemp)+" degrees? It is recommended to save on power consumption"
+                                        
+                                        op_ac= "changeTemperature"
+                                        print("insert item to NotifyUser")
+                                        response2 = NotifyUserTable.put_item(Item={"op_ac":op_ac, "reason":reason,"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                                        topic= "set op."+ opName +".notifyUserID = :g "
+                                        response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                                        UpdateExpression=topic ,
+                                        ExpressionAttributeValues={':g':False },
+                                        ReturnValues="UPDATED_NEW") 
+                                    else:
+                                        print("noo Too much!!!") 
+                        else:
+                            isWindowOpen = False
+                            for window in RoomsStatus_response['Item'][floor][room]["devices"]["windowDevices"]["windowsStatus"]:
+                                if window["isOn"] == True:
+                                    isWindowOpen = True
+                            if isWindowOpen == True:
+                                if auto['AirConditioner'] == True:
+                                    topic =  "jobs/" + user_uuid + '/' + floor + "/" + room + "/window/state"
+                                    iot_client.publish(topic=topic,payload=json.dumps({"status":"close","reason":"openedWindow"}))
+                                    print("post mqtt to close window")
+                                else:
+                                    if doNotify == True:
+                                        opName = "AcOp"
+                                        msgToUser="The air conditioner is on, but so is the window. Do you want us to close the window?"
+                                        reason="openedWindow"
+                                        op_ac= "turnOffAc"
+                                        print("insert item to NotifyUser")
+                                        response2 = NotifyUserTable.put_item(Item={"op_ac":op_ac, "reason": reason,"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                                        topic= "set op."+ opName +".notifyUserID = :g "
+                                        response3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+                                        UpdateExpression=topic ,
+                                        ExpressionAttributeValues={':g':False },
+                                        ReturnValues="UPDATED_NEW") 
+                                    else:
+                                        print("noo Too much!!!") 
+                               
+                    # else:
+                    #     diff = weaterTemp - optimalTemp
+                    #     if  diff < 1:
+                    #         if auto['AirConditioner'] == True:
+                    #                 topic =  "jobs/" + user_uuid +'/' + floor + "/" + room + "/ac/state";
+                    #     iot_client.publish(topic=topic,payload=json.dumps({"set_status":"off"}))
+                    #     topic =  "jobs/" + user_uuid + '/' + floor + "/" + room + "/window/state"
+                    #         iot_client.publish(topic=topic,payload=json.dumps({"status":"open","reason":"weaterTemp"}
+                    #              print("post mqtt +open window")
+                    #         else:
+                    #             print("insert item to NotifyUser")
+                    #    response2 = NotifyUserTable.put_item(Item={"floor": floor,"NotifyUserID": str(notifyUserID), "room": room,"userAnswer": 0,"UserID": user_uuid ,"op": opName,"msgToUser": msgToUser})
+                         
+                        
+
+                    
+            
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }

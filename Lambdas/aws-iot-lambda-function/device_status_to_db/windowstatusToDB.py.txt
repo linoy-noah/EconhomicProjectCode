@@ -1,0 +1,143 @@
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+from datetime import datetime
+
+dynamodb_client = boto3.client('dynamodb', region_name="eu-west-1")
+ddb = boto3.resource('dynamodb')
+table = ddb.Table('RoomsStatus')
+
+now = datetime.now()
+
+timestamp = datetime.timestamp(now)
+
+date_time = datetime.fromtimestamp(timestamp)
+h = int(date_time.strftime("%H"))
+t = date_time.strftime("%H:%M:%S")
+d = date_time.strftime("%d-%m-%Y")
+set_time = date_time.strftime("%d-%m-%Y,%H:%M:%S")
+#UserConfigTable = ddb.Table('UserConfig')
+
+
+
+def lambda_handler(event, context):
+    print(event)
+    intro_update_topic = event["floor"]+"."+event["room"]+".devices.windowDevices"
+    response = table.get_item(Key={'UserID' : event['uuid']})
+    #response_2 = UserConfigTable.get_item(Key={'UserID' : event['uuid']})
+    index=-1
+    i=0
+    # print(response['Item'][event["floor"]][event["room"]]["devices"])
+    for win in response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsStatus"]:
+        if win["number"] == event["number"]:
+            index=i
+        i+=1    
+        
+    if event["status"] == "open": 
+        if event["whoTurn"] == "us":
+            n = {"isOn": True, "SetOnLogs":{"setOffTime": "Null","setOnTime": set_time, "whoTurnOff": "Null", "whoTurnOn": event["whoTurn"],"reason":event["reason"]} ,"number": event["number" ]}
+        else:
+            n = {"isOn": True, "SetOnLogs":{"setOffTime": "Null","setOnTime": set_time, "whoTurnOff": "Null", "whoTurnOn": event["whoTurn"],"reason":""} ,"number": event["number" ]}
+        
+        
+        if index == -1:
+        # print(tapWater["whoIsOn"])
+            
+            k=list()
+            k.append(n)
+            
+            update_topic ="set " + intro_update_topic+".windowsStatus  = list_append(:w,:k), "
+            update_topic += intro_update_topic+".windowsAmount =:l"
+            print(update_topic)
+            
+            response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':k':k,":w":response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsStatus"],":l" : (response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsAmount"]+1)},
+            ReturnValues="UPDATED_NEW")
+            print("insert new tapwater")
+        else:
+            update_topic ="set " + intro_update_topic+".windowsStatus["+str(index)+"].isOn= :a, "
+            update_topic += intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.setOnTime =:l,"
+            update_topic += intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.whoTurnOn =:r"
+            if event["whoTurn"]=="us":
+                update_topic += ', '+intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.reason =:m"
+                print(update_topic)
+                response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+                UpdateExpression=update_topic ,
+                ExpressionAttributeValues={':a':True,':l':set_time,':r':event["whoTurn"],':m':event['reason']},
+                ReturnValues="UPDATED_NEW") 
+                print("insert new tapwater")
+            else:
+                print(update_topic)
+                response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+                UpdateExpression=update_topic ,
+                ExpressionAttributeValues={':a':True,':l':set_time,':r':event["whoTurn"]},
+                ReturnValues="UPDATED_NEW") 
+                print("insert new tapwater")
+
+            
+            
+    if event["status"] == "close" and not index==-1: 
+        window_log = response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsStatus"][index]["SetOnLogs"]
+        # if window_log["whoTurnOff"] == "us":
+        #     turn_off_time = datetime.strptime(window_log["setOffTime"],"%d-%m-%Y,%H:%M:%S")
+        #     diff = now - turn_off_time
+        #     minutessince = int(diff.total_seconds() / 60)
+        #     if minutessince => 5: 
+        #         print("update an error in baseline update userconfig ")
+        #         if window_log["reason"] == "outSide_lightLevel":
+        #             print("lightsop")
+        #             avg_diff =  (Decimal(response_2['Item']["op"]["lightsOp"]["errorCounter"] * response_2['Item']["op"]["lightsOp"]["averageTimeError"]) + Decimal(minutessince) ) /(response_2['Item']["op"]["lightsOp"]["errorCounter"] +1)
+        #             _topic_= "set op.waterTapOp.errorCounter = :g , op.lightsOp.averageTimeError =:t "
+        #             response_3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+        #             UpdateExpression=_topic_ ,
+        #             ExpressionAttributeValues={':t':avg_diff,':g':(response_2['Item']["op"]["lightsOp"]["errorCounter"] + 1) },
+        #             ReturnValues="UPDATED_NEW") 
+                    
+        #         if window_log["reason"] == "outSide_temperature":
+        #             print("ac-turnoff-op")
+        #             avg_diff =  (Decimal(response_2['Item']["op"]["lightsOp"]["errorCounter"] * response_2['Item']["op"]["lightsOp"]["averageTimeError"]) + Decimal(minutessince) ) /(response_2['Item']["op"]["lightsOp"]["errorCounter"] +1)
+        #             _topic_= "set op.waterTapOp.errorCounter = :g , op.lightsOp.averageTimeError =:t "
+        #             response_3 = UserConfigTable.update_item(Key ={'UserID' :  event['uuid']},
+        #             UpdateExpression=_topic_ ,
+        #             ExpressionAttributeValues={':t':avg_diff,':g':(response_2['Item']["op"]["lightsOp"]["errorCounter"] + 1) },
+        #             ReturnValues="UPDATED_NEW") לתקן לאופרציה של המזגן
+        update_topic ="set " + intro_update_topic+".windowsStatus["+str(index)+"].isOn= :a, "
+        update_topic += intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.setOffTime =:l,"
+        update_topic += intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.whoTurnOff =:r"
+        if event['whoTurn'] =="us":
+            update_topic +=", "+ intro_update_topic+".windowsStatus["+str(index)+"].SetOnLogs.reason =:m"
+            print(update_topic)
+            response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':a':False,':l':set_time,':r':event['whoTurn'],':m':event["reason"]},
+            ReturnValues="UPDATED_NEW") 
+            print("insert new tapwater")
+        else:
+            print(update_topic)
+            response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+            UpdateExpression=update_topic ,
+            ExpressionAttributeValues={':a':False,':l':set_time,':r':event['whoTurn']},
+            ReturnValues="UPDATED_NEW") 
+            print("insert new tapwater")
+    
+    
+    if event["status"] == "close" and index==-1: 
+        n = {"isOn": False, "SetOnLogs":{"setOffTime": "Null","setOnTime": "Null", "whoTurnOff": "Null","whoTurnOn":"Null","reason":""} ,"number": event["number" ]}
+        k=list()
+        k.append(n)
+        
+        update_topic ="set " + intro_update_topic+".windowsStatus  = list_append(:w,:k), "
+        update_topic += intro_update_topic+".windowsAmount =:l"
+        print(update_topic)
+        
+        response4 = table.update_item(Key ={'UserID' :  event['uuid']},
+        UpdateExpression=update_topic ,
+        ExpressionAttributeValues={':k':k,":w":response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsStatus"],":l" : (response['Item'][event["floor"]][event["room"]]["devices"]["windowDevices"]["windowsAmount"]+1)},
+        ReturnValues="UPDATED_NEW")
+        print("insert new tapwater")
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }
